@@ -35,61 +35,40 @@
 DEFINE_IDR(encl_idr);                
 DEFINE_SPINLOCK(encl_idr_lock);
 
-static int enclave_idr_alloc(struct Enclave *encl);
-static struct Enclave* enclave_idr_remove(int ueid);
-
-int enclave_alloc(unsigned long min_pages)
+struct Enclave* enclave_create(unsigned long min_pages)
 {
-        int ueid = 0;
         struct Enclave *encl = NULL;
-        struct Epm *epm = NULL;
         
         encl = kmalloc(ENCLAVE_STRUCT_SIZE, GFP_KERNEL);
         if (encl == NULL) {
                 printk(KERN_ERR "keystone_drv: failed to allocate Enclave struct\r\n");
-                return -1;
+                return NULL;
         }
         
         encl->utm = NULL;
         encl->close_on_pexit = 1;
-        
-        epm = kmalloc(EPM_STRUCT_SIZE, GFP_KERNEL);
-        if (epm == NULL) {
-                printk(KERN_ERR "keystone_drv: failed tp allocate Epm struct\r\n");
-                kfree(encl);
-                return -1;
-        }
-        
-        encl->epm = epm;
         encl->is_init = true;
         
-        if (epm_init(encl->epm, min_pages * PAGE_SIZE) != 0) {
-                printk(KERN_ERR "keystone_drv: failed to initialize Epm struct\r\n");
-                kfree(epm);
-                kfree(encl);
-                return -1;
+        encl->epm = kmalloc(EPM_STRUCT_SIZE, GFP_KERNEL);
+        if (encl->epm == NULL) {
+                printk(KERN_ERR "keystone_drv: failed to allocate Epm struct\r\n");
+                enclave_free(encl);
+                return NULL;
         }
         
-        ueid = enclave_idr_alloc(encl);
-        if (ueid < ENCLAVE_IDR_MIN || ueid >= ENCLAVE_IDR_MAX) {
-                return -1;
+        if (epm_init(encl->epm, min_pages) != 0) {
+                enclave_free(encl);
+                return NULL;
         }
         
-        return ueid;
+        return encl;
 }
 
-int enclave_free(int ueid)
+int enclave_free(struct Enclave *encl)
 {
-        struct Enclave *encl = NULL;
         struct Epm *epm = NULL;
         struct Utm *utm = NULL;
-
-        if (ueid < ENCLAVE_IDR_MIN || ueid >= ENCLAVE_IDR_MAX) {
-                printk(KERN_ERR "keystone_drv: invalid UID\r\n");
-                return -EINVAL;
-        }
         
-        encl = enclave_idr_remove(ueid);
         if (encl == NULL) {
                 return -EINVAL;
         }
@@ -117,7 +96,6 @@ struct Enclave* enclave_get_by_id(int ueid)
         struct Enclave *encl = NULL;
 
         if (ueid < ENCLAVE_IDR_MIN || ueid >= ENCLAVE_IDR_MAX) {
-                printk(KERN_ERR "keystone_drv: invalid UID\r\n");
                 return NULL;
         }
         
@@ -125,10 +103,10 @@ struct Enclave* enclave_get_by_id(int ueid)
         encl = idr_find(&encl_idr, ueid);
         spin_unlock_bh(&encl_idr_lock);
         
-        return NULL;
+        return encl;
 }
 
-static int enclave_idr_alloc(struct Enclave *encl)
+int enclave_idr_alloc(struct Enclave *encl)
 {
         unsigned int ueid = 0;
         
@@ -137,25 +115,23 @@ static int enclave_idr_alloc(struct Enclave *encl)
                          ENCLAVE_IDR_MAX, GFP_KERNEL);
         spin_unlock_bh(&encl_idr_lock);
         if (ueid < ENCLAVE_IDR_MIN || ueid >= ENCLAVE_IDR_MAX) {
-                printk(KERN_ERR "keystone_drv: failed to allocate UID\r\n");
                 return -1;
         }
         
         return ueid;
 }
 
-static struct Enclave* enclave_idr_remove(int ueid)
+struct Enclave* enclave_idr_remove(int ueid)
 {
         struct Enclave *encl = NULL;
         
         if (ueid < ENCLAVE_IDR_MIN || ueid >= ENCLAVE_IDR_MAX) {
-                printk(KERN_ERR "keystone_drv: invalid UID\r\n");
                 return NULL;
         }
         
         spin_lock_bh(&encl_idr_lock);
         encl = idr_remove(&encl_idr, ueid);
-        spin_unlock(&encl_idr_lock);
+        spin_unlock_bh(&encl_idr_lock);
         
         return encl;
 }

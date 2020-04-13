@@ -29,6 +29,7 @@
 #include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/mm.h>
+#include <linux/slab.h>
 #include <linux/miscdevice.h>
 #include <linux/dma-mapping.h>
 #include <asm/sbi.h>
@@ -78,7 +79,7 @@ static int __init keystone_init(void)
         }
         
         keystone_drv.this_device->coherent_dma_mask = DMA_BIT_MASK(32);
-        printk(KERN_INFO "keystone_drv: " DRIVER_DESCRIPTION " v" DRIVER_VERSION_STRING "\r\n");
+        printk(KERN_INFO "keystone: " DRIVER_DESCRIPTION " v" DRIVER_VERSION_STRING "\r\n");
         
         return err;
 }
@@ -91,18 +92,17 @@ static void __exit keystone_exit(void)
 
 int keystone_mmap(struct file *filp, struct vm_area_struct *vma)
 {
+        int *ueid_ptr = 0;
+        unsigned long vsize, psize;
+        paddr_t paddr;
         struct Utm *utm = NULL;
         struct Epm *epm = NULL;
         struct Enclave *encl = NULL;
-        int ueid = 0;
-        unsigned long vsize, psize;
-        paddr_t paddr;
         
-        ueid = *((int *) filp->private_data);
+        ueid_ptr =  (int *) filp->private_data;
         
-        encl = enclave_get_by_id(ueid);
+        encl = enclave_get_by_id(*ueid_ptr);
         if (encl == NULL) {
-                printk(KERN_ERR "keystone_drv: invalid enclave id\r\n");
                 return -EINVAL;
         }
         
@@ -133,8 +133,15 @@ int keystone_mmap(struct file *filp, struct vm_area_struct *vma)
 
 int keystone_open(struct inode *inode, struct file *filp)
 {
-        printk(KERN_INFO "keystone_drv: driver is opend\r\n");
-        filp->private_data = NULL;
+        int *ueid_ptr = kmalloc(sizeof(int), GFP_KERNEL);
+        if (ueid_ptr == NULL) {
+                return -ENOMEM;
+        }
+        
+        *ueid_ptr = 0;
+        
+        filp->private_data = ueid_ptr;
+        
         return 0;
 }
 
@@ -148,11 +155,12 @@ int keystone_release(struct inode *inode, struct file *filp)
                 return 0;
         }
         
-
-        ueid = *((int *)(filp->private_data));
-        encl = enclave_get_by_id(ueid);
+        ueid = *((int *) filp->private_data);
+        kfree(filp->private_data);
+        
+        encl = enclave_idr_remove(ueid);
         if (encl == NULL) {
-                return -EINVAL;
+                return 0;
         }
         
         if (encl->close_on_pexit) {
@@ -162,7 +170,7 @@ int keystone_release(struct inode *inode, struct file *filp)
                         return retval;
                 }
                 
-                enclave_free(encl->eid);
+                enclave_free(encl);
         }
         
         return 0;

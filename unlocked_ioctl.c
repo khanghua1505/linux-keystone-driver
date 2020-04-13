@@ -33,182 +33,171 @@
 
 #include "keystone.h"
 
-static int ioctl_create_enclave(struct file *filp, unsigned long args)
+int ioctl_create_enclave(struct file *filp, unsigned long args)
 {
-        struct keystone_ioctl_create_enclave_args *encl_args = NULL;
-        int encl_id = 0;
+        int *ueid_ptr = NULL;
         struct Enclave *encl = NULL;
+        struct keystone_ioctl_create_enclave_args  \
+                *ioctl_create_encl_args = NULL;
+                
+        ueid_ptr = (int *) filp->private_data;
         
-        encl_args = (struct keystone_ioctl_create_enclave_args *) args;
-        encl_id = enclave_alloc(encl_args->min_pages);
-        if (encl_id < 0) {
+        ioctl_create_encl_args =  \
+                (struct keystone_ioctl_create_enclave_args *) args;
+        
+        encl = enclave_create(ioctl_create_encl_args->min_pages);
+        if (encl == NULL) {
                 return -ENOMEM;
         }
 
-        encl = enclave_get_by_id(encl_id);
-        
-        encl_args->pt_ptr = __pa(encl->epm->root_page_table);
-        encl_args->epm_size = encl->epm->size;
-        encl_args->eid = encl_id;
-        
-        filp->private_data = (void *) &encl->eid;
+        ioctl_create_encl_args->pt_ptr = __pa(encl->epm->root_page_table);
+        ioctl_create_encl_args->epm_size = encl->epm->size;
+        ioctl_create_encl_args->ueid = enclave_idr_alloc(encl); 
+               
+        *ueid_ptr = ioctl_create_encl_args->ueid;
         
         return 0;
 }
 
-static int ioctl_finalize_enclave(struct file *filp, unsigned long args)
+int ioctl_finalize_enclave(struct file *filp, unsigned long args)
 {
         int retval = 0;
         struct Enclave *encl = NULL;
-        struct keystone_ioctl_create_enclave_args *ioctl_args = NULL;
-        struct keystone_sbi_create_enclave_args sbi_args;
+        struct keystone_sbi_create_enclave_args sbi_create_encl_args;
+        struct keystone_ioctl_create_enclave_args *ioctl_create_encl_args = NULL;
         
-        ioctl_args = (struct keystone_ioctl_create_enclave_args *) args;
+        ioctl_create_encl_args = \
+                (struct keystone_ioctl_create_enclave_args *) args;
         
-        encl = enclave_get_by_id(ioctl_args->eid);
+        encl = enclave_get_by_id(ioctl_create_encl_args->ueid);
         if (encl == NULL) {
-                printk(KERN_ERR "keystone_drv: invalid enclave id\r\n");
+                printk(KERN_ERR "keystone: invalid enclave id\r\n");
                 return -EINVAL;
         }
         
         encl->is_init = false;
         
-        sbi_args.epm_region.paddr = encl->epm->pa;
-        sbi_args.epm_region.size = encl->epm->size;
+        sbi_create_encl_args.epm_region.paddr = encl->epm->pa;
+        sbi_create_encl_args.epm_region.size = encl->epm->size;
         
         if (encl->utm) {
-                sbi_args.utm_region.paddr = __pa(encl->utm->ptr);
-                sbi_args.utm_region.size = encl->utm->size;
+                sbi_create_encl_args.utm_region.paddr = __pa(encl->utm->ptr);
+                sbi_create_encl_args.utm_region.size = encl->utm->size;
         } else {
-                sbi_args.utm_region.paddr = 0;
-                sbi_args.utm_region.size = 0;
+                sbi_create_encl_args.utm_region.paddr = 0;
+                sbi_create_encl_args.utm_region.size = 0;
         }
         
-        sbi_args.runtime_paddr = ioctl_args->runtime_paddr;
-        sbi_args.user_paddr = ioctl_args->user_paddr;
-        sbi_args.free_paddr = ioctl_args->free_paddr;
-        sbi_args.params = ioctl_args->params;
-        sbi_args.eid_pptr = (__u64 *) __pa(&encl->eid);
+        sbi_create_encl_args.runtime_paddr = ioctl_create_encl_args->runtime_paddr;
+        sbi_create_encl_args.user_paddr = ioctl_create_encl_args->user_paddr;
+        sbi_create_encl_args.free_paddr = ioctl_create_encl_args->free_paddr;
+        sbi_create_encl_args.params = ioctl_create_encl_args->params;
         
-        retval = SBI_CALL_1(KEYSTONE_SBI_CREATE_ENCLAVE, __pa(&sbi_args));
+        sbi_create_encl_args.eid_pptr = (uint64_t *) __pa(&encl->eid);
+        
+        retval = SBI_CALL_1(KEYSTONE_SBI_CREATE_ENCLAVE, __pa(&sbi_create_encl_args));
         if (retval != 0) {
-                printk(KERN_ERR "keystone_drv SBI call failed\r\n");
-                enclave_free(ioctl_args->eid);
-                return -ENOSYS;
+                printk(KERN_ERR "keystone_drv: create enclave sbi call failed\r\n");
+                enclave_free(encl);
+                return retval;
         }
         
         return retval;
 }
 
-static int ioctl_run_enclave(struct file *filp, unsigned long args)
+int ioctl_run_enclave(struct file *filp, unsigned long args)
 {
         int retval = 0;
-        int ueid = 0;
         struct Enclave *encl = NULL;
-        struct keystone_ioctl_run_enclave_args *ioctl_args = NULL;
+        struct keystone_ioctl_run_enclave_args *ioctl_run_encl_args = NULL;
         
-        ioctl_args = (struct keystone_ioctl_run_enclave_args *) args;
+        ioctl_run_encl_args =  \
+                (struct keystone_ioctl_run_enclave_args *) args;
         
-        ueid = ioctl_args->eid;
-        encl = enclave_get_by_id(ueid);
+        encl = enclave_get_by_id(ioctl_run_encl_args->ueid);
         if (encl == NULL) {
-                printk(KERN_ERR "Invalid enclave id\r\n");
                 return -EINVAL;
         }
         
         retval = SBI_CALL_1(KEYSTONE_SBI_RUN_ENCLAVE, encl->eid);
-        if (retval != 0) {
-                printk(KERN_ERR "keystone_drv SBI call failed\r\n");
-                return -ENOSYS;
-        }
-        
+
         return retval;
 }
 
-static int ioctl_utm_init(struct file *filp, unsigned long args)
+int ioctl_utm_init(struct file *filp, unsigned long args)
 {
         int retval = 0;
+        size_t untrusted_size = 0;
         struct Enclave *encl = NULL;
         struct Utm *utm = NULL;
-        size_t untrusted_size = 0;
-        struct keystone_ioctl_create_enclave_args *ioctl_args = NULL;
+        struct keystone_ioctl_create_enclave_args *ioctl_create_encl_args = NULL;
         
-        ioctl_args = (struct keystone_ioctl_create_enclave_args *) args;
+        ioctl_create_encl_args =  \
+                (struct keystone_ioctl_create_enclave_args *) args;
+                
+        untrusted_size = ioctl_create_encl_args->params.untrusted_size;
         
-        untrusted_size = ioctl_args->params.untrusted_size;
-        
-        encl = enclave_get_by_id(ioctl_args->eid);
+        encl = enclave_get_by_id(ioctl_create_encl_args->ueid);
         if (encl == NULL) {
-                printk(KERN_ERR "Invalid enclave id\r\n");
                 return -EINVAL;
         }
         
-        utm = kmalloc(UTM_STRUCT_SIZE, GFP_KERNEL);
+        utm = (struct Utm *) kmalloc(UTM_STRUCT_SIZE, GFP_KERNEL);
         if (utm == NULL) {
                 return -ENOMEM;
         }
         
         retval = utm_init(utm, untrusted_size);
         if (retval != 0) {
-                return -ENOSYS;
+                return retval;
         }
         
         encl->utm = utm;
-        ioctl_args->utm_free_ptr = __pa(utm->ptr);
+        ioctl_create_encl_args->utm_free_ptr = __pa(utm->ptr);
 
         return retval;
 }
 
-static int ioctl_destroy_enclave(struct file *filp, unsigned long args)
+int ioctl_destroy_enclave(struct file *filp, unsigned long args)
 {
         int retval = 0;
-        int ueid = 0;
+        uint64_t eid = 0;
         struct Enclave *encl = NULL;
-        struct keystone_ioctl_create_enclave_args *ioctl_args = NULL;
+        struct keystone_ioctl_create_enclave_args *ioctl_create_encl_args = NULL;
         
-        ioctl_args = (struct keystone_ioctl_create_enclave_args *) args;
+        ioctl_create_encl_args =  \
+                (struct keystone_ioctl_create_enclave_args *) args;
         
-        ueid = ioctl_args->eid;
-        
-        encl = enclave_get_by_id(ueid);
+        encl = enclave_idr_remove(ioctl_create_encl_args->ueid);
         if (encl == NULL) {
-                printk(KERN_ERR "Invalid enclave id\r\n");
                 return -EINVAL;
         }
         
-        retval = SBI_CALL_1(KEYSTONE_SBI_DESTROY_ENCLAVE, encl->eid);
+        retval = SBI_CALL_1(KEYSTONE_SBI_DESTROY_ENCLAVE, eid);
         if (retval != 0) {
-                printk(KERN_ERR "keystone_drv: cannot destroy enclave\r\n");
                 return retval;
         }
         
-        enclave_free(encl->eid);
+        eid = encl->eid;
+        enclave_free(encl);
         
-        return 0;
+        return retval;
 }
 
-static int ioctl_resume_enclave(struct file *filp, unsigned long args)
+int ioctl_resume_enclave(struct file *filp, unsigned long args)
 {
         int retval = 0;
-        int ueid = 0;
         struct Enclave *encl = NULL;
-        struct keystone_ioctl_run_enclave_args *ioctl_args = NULL;
+        struct keystone_ioctl_run_enclave_args *ioctl_run_encl_args = NULL;
         
-        ioctl_args = (struct keystone_ioctl_run_enclave_args *) args;
+        ioctl_run_encl_args = (struct keystone_ioctl_run_enclave_args *) args;
         
-        ueid = ioctl_args->eid;
-        
-        encl = enclave_get_by_id(ueid);
+        encl = enclave_get_by_id(ioctl_run_encl_args->ueid);
         if (encl == NULL)  {
-                printk(KERN_ERR "Invalid enclave id\r\n");
                 return -EINVAL;
         }
         
         retval = SBI_CALL_1(KEYSTONE_SBI_RESUME_ENCLAVE, encl->eid);
-        if (retval != 0) {
-                printk(KERN_ERR "keystone_drv: cannot destroy enclave\r\n");
-                return retval;
-        }
         
         return retval;
 }
@@ -218,18 +207,14 @@ long keystone_unlocked_ioctl(struct file *filp, unsigned int cmd,
 {
         int retval = 0;
         size_t args_size = 0;
-        __u8 *buffer = NULL;
+        uint8_t buffer[512];
         
         if (!args) {
                 return -EINVAL;
         }
         
         args_size = _IOC_SIZE(cmd);
-        
-        buffer = (__u8 *) kmalloc(args_size, GFP_KERNEL);
-        if (buffer == NULL) {
-                return -ENOMEM;
-        }
+        args_size = args_size > sizeof(buffer) ? sizeof(buffer) : args_size;
         
         retval = copy_from_user(buffer, (void __user *)args, args_size);
         if (retval != 0) {
@@ -238,29 +223,29 @@ long keystone_unlocked_ioctl(struct file *filp, unsigned int cmd,
         
         switch (cmd) {
         case KEYSTONE_IOC_CREATE_ENCLAVE:
-                ioctl_create_enclave(filp, (unsigned long) buffer);
+                retval = ioctl_create_enclave(filp, (unsigned long) buffer);
                 break;
         case KEYSTONE_IOC_FINALIZE_ENCLAVE:
-                ioctl_finalize_enclave(filp, (unsigned long) buffer);
+                retval = ioctl_finalize_enclave(filp, (unsigned long) buffer);
                 break;
         case KEYSTONE_IOC_DESTROY_ENCLAVE:
-                ioctl_destroy_enclave(filp, (unsigned long) buffer);
+                retval = ioctl_destroy_enclave(filp, (unsigned long) buffer);
                 break;
         case KEYSTONE_IOC_RUN_ENCLAVE:
-                ioctl_run_enclave(filp, (unsigned long) buffer);
+                retval = ioctl_run_enclave(filp, (unsigned long) buffer);
                 break;
         case KEYSTONE_IOC_RESUME_ENCLAVE:
-                ioctl_resume_enclave(filp, (unsigned long) buffer);
+                retval = ioctl_resume_enclave(filp, (unsigned long) buffer);
                 break;
         case KEYSTONE_IOC_UTM_INIT:
-                ioctl_utm_init(filp, (unsigned long) buffer);
+                retval = ioctl_utm_init(filp, (unsigned long) buffer);
                 break;
         default:
                 return -ENOSYS;
         }
         
-        retval = copy_to_user((void __user *)args, buffer, args_size);
-        if (retval != 0) {
+        if (copy_to_user((void __user *)args, buffer, args_size) != 0) {
+                printk(KERN_DEBUG "copy to user failed\r\n");
                 return -EFAULT;
         }
         

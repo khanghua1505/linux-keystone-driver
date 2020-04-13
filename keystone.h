@@ -62,7 +62,7 @@ struct runtime_params
 
 struct keystone_ioctl_create_enclave_args
 {
-        __u64 eid;              /* Enclave id. */
+        __u64 ueid;             /* User Enclave id. */
         __u64 min_pages;        /* Min pages required. */
         __u64 runtime_vaddr;    /* Runtime virtual memory. */
         __u64 user_vaddr;       /* User virtual memory. */
@@ -84,7 +84,7 @@ struct keystone_ioctl_create_enclave_args
 
 struct keystone_ioctl_run_enclave_args
 {
-        __u64 eid;
+        __u64 ueid;
         __u64 entry;
         __u64 args_ptr;
         __u64 args_size;
@@ -108,7 +108,7 @@ struct keystone_sbi_create_enclave_args
         
         struct runtime_params params;
         
-        __u64 *eid_pptr;
+        uint64_t *eid_pptr;
 };
 
 #endif  // _KEYSTONE_H_

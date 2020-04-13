@@ -32,13 +32,13 @@
 
 #include "utm.h"
 
-int utm_init(struct Utm *utm, size_t size)
+int utm_init(struct Utm *utm, size_t untrusted_size)
 {
         unsigned long required_pages = 0;
         unsigned long page_order = 0;
         unsigned long count = 0;
         
-        required_pages = PAGE_UP(size)/PAGE_SIZE;
+        required_pages = PAGE_UP(untrusted_size)/PAGE_SIZE;
         page_order = ilog2(required_pages - 1) + 1;
         count = (0x1) << page_order;
         
@@ -46,12 +46,12 @@ int utm_init(struct Utm *utm, size_t size)
         
         //! Note: Currently, UTM does not utilize CMA.
         utm->ptr = (vaddr_t) __get_free_pages(GFP_HIGHUSER, page_order);
-        if (utm->ptr == (vaddr_t) NULL) {
+        if (!utm->ptr) {
                 return -ENOMEM;
         }
         
         utm->size = count * PAGE_SIZE;
-        if (utm->size != size) {
+        if (utm->size != untrusted_size) {
                 printk(KERN_WARNING "keystone_drv: shared buffer size \
                         is not multiple of PAGE_SIZE\r\n");
         }
@@ -64,10 +64,6 @@ int utm_deinit(struct Utm *utm)
 {
         if (utm->ptr != (vaddr_t) NULL) {
                 free_pages((vaddr_t) utm->ptr, utm->order);
-                utm->root_page_table = NULL;
-                utm->ptr = (vaddr_t) NULL;
-                utm->size = 0;
-                utm->order = 0;
         }
         
         return 0;

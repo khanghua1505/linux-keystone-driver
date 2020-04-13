@@ -27,50 +27,78 @@
 #include <linux/types.h>
 #include <linux/printk.h>
 #include <linux/slab.h>
+#include <linux/dma-mapping.h>
+#include <linux/miscdevice.h>
 #include <asm/page.h>
 
 #include "epm.h"
 
-int epm_init(struct Epm *epm, size_t size)
+int epm_init(struct Epm *epm, unsigned long min_pages)
 {
-        vaddr_t epm_vaddr = 0;
-        unsigned long required_pages = 0;
         unsigned long page_order = 0;
         unsigned long count = 0;
+        vaddr_t epm_vaddr = 0;
+        phys_addr_t device_phys_addr = 0;
         
-        required_pages = PAGE_UP(size)/PAGE_SIZE;
-        page_order = ilog2(required_pages - 1) + 1;
+        extern struct miscdevice keystone_drv;
+        
+        epm->is_cma = 0;
+        
+        page_order = ilog2(min_pages - 1) + 1;
         count = (0x1) << page_order;
         
-        if (page_order > MAX_ORDER) {
-                return -EINVAL;
+        if (page_order <= MAX_ORDER) {
+                epm_vaddr = (vaddr_t) __get_free_pages(GFP_HIGHUSER, page_order);
         }
         
-        epm_vaddr = (vaddr_t) __get_free_pages(GFP_HIGHUSER, page_order);
+#ifdef CONFIG_CMA
+        if (!epm_vaddr) {
+                epm->is_cma = 1;
+                count = min_pages;
+                epm_vaddr = (vaddr_t) dma_alloc_coherent(
+                        keystone_drv.this_device,
+                        count << PAGE_SHIFT,
+                        &device_phys_addr,
+                        GFP_KERNEL | __GFP_DMA32);
+                
+                if (!device_phys_addr) {
+                        epm_vaddr = 0;
+                }
+        }
+#endif  // CONFIG_CMA
         
         if (!epm_vaddr) {
-                printk(KERN_ERR "keystone_drv: failed to allocate %lu pages\r\n", required_pages);
+                printk(KERN_ERR "keystone_drv: failed to allocate %lu pages\r\n", min_pages);
                 return -ENOMEM;
         }
         
-        memset((void *)epm_vaddr, 0, PAGE_SIZE * required_pages);
+        memset((void *)epm_vaddr, 0, PAGE_SIZE * count);
         
         epm->root_page_table = (void *) epm_vaddr;
         epm->ptr = epm_vaddr;
         epm->pa = __pa(epm_vaddr);
         epm->order = page_order;
-        epm->size = count * PAGE_SIZE;
+        epm->size = count << PAGE_SHIFT;
         
         return 0;
 }
 
 void epm_deinit(struct Epm *epm)
 {
+        extern struct miscdevice keystone_drv;
+        
         if (!epm->ptr || !epm->size) {
                 return;
         }
         
-        free_pages(epm->ptr, epm->order);
+        if (epm->is_cma) {
+                dma_free_coherent(keystone_drv.this_device,
+                                  epm->size,
+                                  (void *) epm->ptr,
+                                  epm->pa);
+        } else {
+                free_pages(epm->ptr, epm->order);
+        }
 }
         
         

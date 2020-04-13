@@ -37,7 +37,7 @@
 
 struct Enclave
 {
-        int eid;
+        uint64_t eid;
         int close_on_pexit;
         struct Utm *utm;
         struct Epm *epm;
@@ -46,9 +46,11 @@ struct Enclave
 
 #define ENCLAVE_STRUCT_SIZE     (sizeof(struct Enclave))
 
-int enclave_alloc(unsigned long min_pages);
-int enclave_free(int ueid);
+struct Enclave* enclave_create(unsigned long min_pages);
+int enclave_free(struct Enclave *encl);
 struct Enclave* enclave_get_by_id(int ueid);
+int enclave_idr_alloc(struct Enclave *encl);
+struct Enclave* enclave_idr_remove(int ueid);
 
 #endif  // _ENCLAVE_H_
 

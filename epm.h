@@ -41,11 +41,12 @@ struct Epm
         paddr_t pa;
         size_t size;
         unsigned long order;
+        bool is_cma;
 };
 
 #define EPM_STRUCT_SIZE    (sizeof(struct Epm))
 
-int epm_init(struct Epm *epm, size_t size);
+int epm_init(struct Epm *epm, unsigned long min_pages);
 void epm_deinit(struct Epm *epm);
 
 #endif  // _EPM_H_
